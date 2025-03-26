@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Variables
+DOMAIN="www.yourdomain.com"  # Replace with your actual subdomain
+debconf-set-selections <<< "haproxy haproxy/enable boolean true"
+
+# Update system and install required packages
+sudo apt update -y
+sudo apt install -y haproxy certbot python3-certbot-nginx
+
+# Generate SSL Certificate using Certbot
+sudo certbot certonly --nginx -d $DOMAIN --non-interactive --agree-tos -m your-email@example.com
+
+# HAProxy Configuration
+sudo tee /etc/haproxy/haproxy.cfg > /dev/null <<EOL
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log global
+    mode http
+    option httplog
+    option dontlognull
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend http_front
+    bind *:80
+    http-request redirect scheme https code 301
+
+frontend https_front
+    bind *:443 ssl crt /etc/letsencrypt/live/$DOMAIN/fullchain.pem alpn h2,http/1.1
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    default_backend http_back
+
+backend http_back
+    balance roundrobin
+    server web01 184.72.196.72:80 check
+    server web02 3.88.21.88:80 check
+
+listen stats
+    bind *:8080
+    stats enable
+    stats uri /stats
+    stats refresh 10s
+    stats realm Haproxy\ Statistics
+    stats auth admin:admin
+EOL
+
+# Restart HAProxy to apply changes
+sudo systemctl enable haproxy
+sudo systemctl restart haproxy
+
+# Verify HTTP to HTTPS redirection
+curl -I http://$DOMAIN
